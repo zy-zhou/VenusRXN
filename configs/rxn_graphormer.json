@@ -1,0 +1,42 @@
+{
+    "mol_graphormer": {
+        "num_spatial": 10,
+        "num_edge_dis": 5,
+        "edge_type": "multi_hop",
+        "feature_dim": 169,
+        "edge_attr_dim": 15,
+        "num_encoder_layers": 6,
+        "embedding_dim": 512,
+        "ffn_embedding_dim": 512,
+        "num_attention_heads": 32,
+        "dropout": 0.1,
+        "attention_dropout": 0.1,
+        "activation_dropout": 0.1,
+        "layerdrop": 0.0,
+        "encoder_normalize_before": false,
+        "pre_layernorm": false,
+        "apply_graphormer_init": false,
+        "activation_fn": "gelu",
+        "pooling": "cls"
+    },
+    "cgr_graphormer": {
+        "num_spatial": 10,
+        "num_edge_dis": 5,
+        "edge_type": "multi_hop",
+        "feature_dim": 1024,
+        "edge_attr_dim": 30,
+        "num_encoder_layers": 2,
+        "embedding_dim": 512,
+        "ffn_embedding_dim": 512,
+        "num_attention_heads": 32,
+        "dropout": 0.1,
+        "attention_dropout": 0.1,
+        "activation_dropout": 0.1,
+        "layerdrop": 0.0,
+        "encoder_normalize_before": false,
+        "pre_layernorm": false,
+        "apply_graphormer_init": false,
+        "activation_fn": "gelu",
+        "pooling": "cls"
+    }
+}
