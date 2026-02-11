@@ -117,4 +117,3 @@ def compute_shortest_paths(graph, max_dist):
     spatial_pos, path_indices = bfs_spatial_pos_with_path(adj.numpy(), max_dist)
     graph.spatial_pos = torch.from_numpy(spatial_pos).long()
     graph.path_indices = torch.from_numpy(path_indices).long()
-    return graph

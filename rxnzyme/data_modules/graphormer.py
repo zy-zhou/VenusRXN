@@ -66,7 +66,7 @@ class RxnDataModuleForMLM(LightningDataModule):
                     bucket_size=self.train_config['bucket_size'],
                     rank=self.trainer.global_rank,
                     world_size=self.trainer.world_size,
-                    drop_last=True,
+                    drop_last=False,
                     shuffle=True
                 )
             else:

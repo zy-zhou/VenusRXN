@@ -6,8 +6,7 @@ from ..data.datasets import ignore_label
 
 class LitMolGraphormerForMLM(LightningModelBase):
     def __init__(self, mlm_graphormer, train_config):
-        super().__init__(train_config)
-        self.model = mlm_graphormer
+        super().__init__(mlm_graphormer, train_config)
         self.alpha = train_config['alpha'] # weight for reactive center prediction task
         self.beta = train_config['beta'] # weight for graph contrastive learning task
         self.ce_loss = MultiAttrCELoss(ignore_index=ignore_label)
@@ -16,7 +15,6 @@ class LitMolGraphormerForMLM(LightningModelBase):
             gather_with_grad=train_config['gather_with_grad'],
             soft_weight=0.0
         )
-        self.save_hyperparameters(ignore=['mlm_graphormer'])
 
     def setup(self, stage='fit'):
         self.cl_loss.rank = self.trainer.global_rank
@@ -49,14 +47,12 @@ class LitMolGraphormerForMLM(LightningModelBase):
 
 class LitRxnGraphormerForSCL(LightningModelBase):
     def __init__(self, scl_graphormer, train_config):
-        super().__init__(train_config)
-        self.model = scl_graphormer
+        super().__init__(scl_graphormer, train_config)
         self.cl_loss = ContrastiveLoss(
             local_loss=train_config['local_loss'],
             gather_with_grad=train_config['gather_with_grad'],
             soft_weight=0.0
         )
-        self.save_hyperparameters(ignore=['scl_graphormer'])
     
     def setup(self, stage='fit'):
         self.cl_loss.rank = self.trainer.global_rank
@@ -143,10 +139,8 @@ class LitRxnGraphormerForSCL(LightningModelBase):
     
 class LitRxnGraphormerForCls(LightningModelBase):
     def __init__(self, cls_graphormer, train_config):
-        super().__init__(train_config)
-        self.model = cls_graphormer
+        super().__init__(cls_graphormer, train_config)
         self.ce_loss = nn.CrossEntropyLoss()
-        self.save_hyperparameters(ignore=['cls_graphormer'])
 
     def setup(self, stage='fit'):
         if stage in {'fit', 'validate'} and self.trainer.datamodule.val_dataset is not None:

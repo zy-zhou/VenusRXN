@@ -16,7 +16,7 @@ class RankingHead(nn.Module):
         x = self.activation_fn(x)
         x = self.dropout(x)
         x = self.ranker(x)
-        return x
+        return x.squeeze(1)
 
 class ProRxn(nn.Module):
     def __init__(self, rxn_graphormer, plm, proj_dim, proj_type='linear'):
@@ -126,17 +126,17 @@ class ProRxnForLTR(nn.Module):
     def forward(self, batch):
         if self.output_type == 'rxn':
             rxn_reps = self.prorxn.encode_rxns(batch['rxns'], use_proj=False)
-            outputs = self.ranking_head(rxn_reps).squeeze(1)
+            outputs = self.ranking_head(rxn_reps)
         
         elif self.output_type == 'enzyme':
             enz_reps = self.prorxn.encode_enzymes(batch['enzymes'], use_proj=False)
-            outputs = self.ranking_head(enz_reps).squeeze(1)
+            outputs = self.ranking_head(enz_reps)
         
         elif self.output_type == 'concat':
             rxn_reps = self.prorxn.encode_rxns(batch['rxns'], use_proj=False)
             enz_reps = self.prorxn.encode_enzymes(batch['enzymes'], use_proj=False)
             rxn_enz_reps = torch.cat([rxn_reps, enz_reps], dim=1)
-            outputs = self.ranking_head(rxn_enz_reps).squeeze(1)
+            outputs = self.ranking_head(rxn_enz_reps)
         
         elif self.output_type == 'cosine':
             rxn_reps = self.prorxn.encode_rxns(batch['rxns'])

@@ -209,24 +209,6 @@ def build_mol_graph(molecules, mapped_features, unmapped_features):
                 num_edges=edge_index.size(1))
     return data
 
-def rxn2graphs(rxn_smiles):
-    assert rxn_smiles != '>>', 'Empty mapped reaction'
-    rxn = AllChem.ReactionFromSmarts(rxn_smiles)
-
-    reactants = [Chem.MolFromSmiles(Chem.MolToSmiles(reactant), sanitize=False) \
-                     for reactant in rxn.GetReactants()]
-    products = [Chem.MolFromSmiles(Chem.MolToSmiles(product), sanitize=False) \
-                    for product in rxn.GetProducts()]
-    match_aams(reactants, products)
-    reactants_features = get_mol_features(reactants)
-    products_features = get_mol_features(products)
-    
-    assert len(reactants_features[0]) > 0, 'No mapped atom'
-    reactants_graph = build_mol_graph(reactants, *reactants_features)
-    products_graph = build_mol_graph(products, *products_features)
-
-    return reactants_graph, products_graph
-
 def build_cgr(reactants_graph, products_graph):
     '''
     Construct a CGR from reactants and products graph.
@@ -253,13 +235,26 @@ def build_cgr(reactants_graph, products_graph):
     return cgr
 
 def build_rxn_graphs(rxn_smiles, max_dist=20, return_cgr=True):
-    reactants_graph, products_graph = rxn2graphs(rxn_smiles)
-    reactants_graph = compute_shortest_paths(reactants_graph, max_dist)
-    products_graph = compute_shortest_paths(products_graph, max_dist)
-        
+    assert rxn_smiles != '>>', 'Empty mapped reaction'
+    rxn = AllChem.ReactionFromSmarts(rxn_smiles)
+
+    reactants = [Chem.MolFromSmiles(Chem.MolToSmiles(reactant), sanitize=False) \
+                     for reactant in rxn.GetReactants()]
+    products = [Chem.MolFromSmiles(Chem.MolToSmiles(product), sanitize=False) \
+                    for product in rxn.GetProducts()]
+    match_aams(reactants, products)
+    reactants_features = get_mol_features(reactants)
+    products_features = get_mol_features(products)
+    
+    assert len(reactants_features[0]) > 0, 'No mapped atom'
+    reactants_graph = build_mol_graph(reactants, *reactants_features)
+    compute_shortest_paths(reactants_graph, max_dist)
+    products_graph = build_mol_graph(products, *products_features)
+    compute_shortest_paths(products_graph, max_dist)
+    
     if return_cgr:
         cgr = build_cgr(reactants_graph, products_graph)
-        cgr = compute_shortest_paths(cgr, max_dist)
+        compute_shortest_paths(cgr, max_dist)
         return reactants_graph, products_graph, cgr
     else:
         return reactants_graph, products_graph
@@ -280,3 +275,13 @@ def get_reactive_center(reactants_graph, products_graph, cgr):
     
     # assert changed_nodes.size(0) > 0, 'No reactive center'
     return changed_nodes
+
+def build_partial_rxn_graph(rxn_smiles, max_dist=20):
+    '''
+    For partially observed reactions that only have smiles for reactants or products.
+    '''
+    molecules = [Chem.MolFromSmiles(mol, sanitize=False) for mol in rxn_smiles.split('.')]
+    mol_features = get_mol_features(molecules)
+    mol_graph = build_mol_graph(molecules, *mol_features)
+    compute_shortest_paths(mol_graph, max_dist)
+    return mol_graph

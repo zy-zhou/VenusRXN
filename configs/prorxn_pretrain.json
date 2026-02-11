@@ -27,6 +27,5 @@
     "grad_ckpt": false,
     "logger": false,
     "log_version": null,
-    "force_cpu": false,
     "precision": "bf16-true"
 }

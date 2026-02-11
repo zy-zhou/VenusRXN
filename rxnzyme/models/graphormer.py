@@ -106,9 +106,6 @@ class RxnGraphormer(nn.Module):
             self.embedding_dim = cgr_graphormer.embedding_dim
 
     def forward(self, batch):
-        if 'reactants' not in batch.keys(): # the batch contains reactants or products only
-            return self.mol_graphormer(batch)
-        
         r_hiddens, r_reps = self.mol_graphormer(batch['reactants'])
         p_hiddens, p_reps = self.mol_graphormer(batch['products'])
 

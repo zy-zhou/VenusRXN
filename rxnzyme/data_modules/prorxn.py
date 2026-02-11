@@ -142,6 +142,21 @@ class ProRxnDataModule(LightningDataModule):
                 )
 
                 self.test_labels = self.test_labels.gather(dim=1, index=test_cdt_indices)
+        
+        elif stage == 'predict':
+            self.pred_rxn_dataset = RxnDataset(
+                db_dir=self.rxn_db_dir,
+                rxn_ids=None, # predict for all reactions
+                spatial_pos_max=self.train_config['multi_hop_max_dist'],
+                mask_unreachable=False
+            )
+
+            self.pred_enz_dataset = EnzymeDataset(
+                db_path=self.enz_db_path,
+                enz_ids=None, # screen all enzymes
+                tokenizer=self.tokenizer,
+                max_length=self.train_config['max_length']
+            )
 
     def train_dataloader(self):
         if self.trainer.world_size > 1:
@@ -248,6 +263,37 @@ class ProRxnDataModule(LightningDataModule):
                 num_workers=self.train_config['num_workers'],
                 prefetch_factor=self.train_config['prefetch_factor']
             )
+
+    def predict_dataloader(self):
+        batch_sampler = get_regular_sampler(
+            self.pred_rxn_dataset,
+            batch_size=self.train_config['eval_batch_size'],
+            shuffle=False,
+            rank=self.trainer.global_rank,
+            world_size=self.trainer.world_size
+        )
+        rxn_dataloader = get_dataloader(
+            self.pred_rxn_dataset,
+            batch_sampler=batch_sampler,
+            num_workers=self.train_config['num_workers'],
+            prefetch_factor=self.train_config['prefetch_factor']
+        )
+
+        batch_sampler = get_regular_sampler(
+            self.pred_enz_dataset,
+            batch_size=self.train_config['eval_batch_size'],
+            shuffle=False,
+            rank=self.trainer.global_rank,
+            world_size=self.trainer.world_size
+        )
+        enz_dataloader = get_dataloader(
+            self.pred_enz_dataset,
+            batch_sampler=batch_sampler,
+            num_workers=self.train_config['num_workers'],
+            prefetch_factor=self.train_config['prefetch_factor']
+        )
+
+        return [rxn_dataloader, enz_dataloader]
 
 class ProRxnDataModuleForLTR(LightningDataModule):
     def __init__(

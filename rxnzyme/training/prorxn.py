@@ -6,8 +6,7 @@ from ..data.datasets import ignore_label
 
 class LitProRxnForMM(LightningModelBase):
     def __init__(self, prorxn, train_config):
-        super().__init__(train_config)
-        self.model = prorxn
+        super().__init__(prorxn, train_config)
         self.cl_loss = ContrastiveLoss(
             local_loss=train_config['local_loss'],
             gather_with_grad=train_config['gather_with_grad'],
@@ -23,7 +22,6 @@ class LitProRxnForMM(LightningModelBase):
                 raise ValueError('The PLM should be configured with cross attention layers when `gamma` > 0.')
         elif self.model.plm.config.add_cross_attention:
             raise Warning('The cross attention layers in the PLM will not be used when `gamma` = 0.')
-        self.save_hyperparameters(ignore=['prorxn'])
 
     def setup(self, stage='fit'):
         self.cl_loss.rank = self.trainer.global_rank
@@ -38,6 +36,12 @@ class LitProRxnForMM(LightningModelBase):
             self.setup_evaluation(
                 self.trainer.datamodule.test_labels.to(self.device),
                 ranking=self.trainer.datamodule.test_cdts is not None
+            )
+        elif stage == 'predict':
+            self.setup_evaluation(
+                eval_rxn_num=len(self.trainer.datamodule.pred_rxn_dataset),
+                eval_enz_num=len(self.trainer.datamodule.pred_enz_dataset),
+                ranking=False
             )
 
     def sample_hard_negatives(self, logits):
@@ -197,17 +201,22 @@ class LitProRxnForMM(LightningModelBase):
             batch_size=preds.size(0)
         )
         self.eval_preds = preds
+    
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        self.evaluation_step(batch, dataloader_idx)
+    
+    def on_predict_epoch_end(self):
+        preds = self.gather_predictions()
+        self.eval_preds = preds
 
 class LitProRxnForLTR(LightningModelBase):
     def __init__(self, prorxn, train_config):
-        super().__init__(train_config)
-        self.model = prorxn
+        super().__init__(prorxn, train_config)
         if train_config['ranking_loss']:
             self.loss_fn = ListMLELoss(temperature=train_config['output_type'] == 'cosine')
         else:
             self.loss_fn = nn.MSELoss()
         self.strict_loading = False
-        self.save_hyperparameters(ignore=['prorxn'])
 
     def state_dict(self):
         frozen_keys = {k for k, v in self.named_parameters() if not v.requires_grad}

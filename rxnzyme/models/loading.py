@@ -37,11 +37,24 @@ def reduce_lit_ckpt(ckpt_path, module_name='model'):
     }
     return weights
 
+def from_pretrained_offline_first(hf_cls, model_name_or_path, **kwargs):
+    '''
+    Load a HuggingFace model/tokenizer/config. First try offline loading, download if failed.
+    '''
+    assert hasattr(hf_cls, 'from_pretrained')
+    assert 'local_files_only' not in kwargs
+    assert 'force_download' not in kwargs
+    try:
+        obj = hf_cls.from_pretrained(model_name_or_path, local_files_only=True, **kwargs)
+    except:
+        obj = hf_cls.from_pretrained(model_name_or_path, **kwargs)
+    return obj
+
 def get_tokenizer(plm_name):
     if plm_name.startswith('esmc'):
         tokenizer = get_esmc_model_tokenizers()
     else:
-        tokenizer = EsmTokenizer.from_pretrained(plm_dirs[plm_name])
+        tokenizer = from_pretrained_offline_first(EsmTokenizer, plm_dirs[plm_name])
     return tokenizer
 
 def get_plm(
@@ -53,37 +66,41 @@ def get_plm(
     ):
     if plm_name.startswith('esmc'):
         d_model, n_heads, n_layers = (960, 15, 30) if plm_name == 'esmc_300m' else (1152, 18, 36)
+        n_layers_cross_attn = n_layers // 2 if add_cross_attn else 0
         
         if pretrained:
-            plm = ESMC.from_pretrained(
+            plm = from_pretrained_offline_first(
+                ESMC,
                 plm_name,
-                n_layers_cross_attn=n_layers // 2 if add_cross_attn else 0,
+                n_layers_cross_attn=n_layers_cross_attn,
                 d_cross_attn=d_cross_attn,
                 add_pooling_layer=add_cross_attn
-            )
+            ).train()
         else:
             plm = ESMC(
                 d_model=d_model,
                 n_heads=n_heads,
                 n_layers=n_layers,
                 tokenizer=get_esmc_model_tokenizers(),
-                n_layers_cross_attn=n_layers // 2 if add_cross_attn else 0,
+                n_layers_cross_attn=n_layers_cross_attn,
                 d_cross_attn=d_cross_attn,
                 add_pooling_layer=add_cross_attn
             )
     
     else:
-        config = EsmConfig.from_pretrained(
+        config = from_pretrained_offline_first(
+            EsmConfig,
             plm_dirs[plm_name],
             add_cross_attention=add_cross_attn,
             cross_attention_hidden_size=d_cross_attn
         )
         if pretrained:
-            plm = EsmModel.from_pretrained(
+            plm = from_pretrained_offline_first(
+                EsmModel,
                 plm_dirs[plm_name],
                 config=config,
                 add_pooling_layer=add_cross_attn
-            )
+            ).train()
         else:
             plm = EsmModel(config, add_pooling_layer=add_cross_attn)
         if grad_ckpt:
@@ -96,6 +113,7 @@ def get_prorxn(
     prorxn_config,
     mg_config,
     cg_config=None,
+    partial_rxns=False,
     grad_ckpt=False,
     pretrained_plm=True,
     mg_ckpt_path=None,
@@ -106,8 +124,8 @@ def get_prorxn(
 
     Args:
         mg_config: Mol-Graphormer config.
-        cg_config: CGR-Graphormer config. `None` means not to use CGR in RXN-Graphormer. 
-        rg_pooling: Pooling method for RXN-Graphormer when not using CGR-Graphormer.
+        cg_config: CGR-Graphormer config. `None` means not to use CGR in RXN-Graphormer.
+        partial_rxns: Whether the model input is incomplete reactions (i.e., only contain reactants or products).
         grad_ckpt: Whether to use gradient checkpointing. Only works for ESM-1 and 2.
         pretrained_plm: Whether to load the pretrained PLM weights.
         mg_ckpt_path: Path to the lightning checkpoint of `LitMolGraphormerForMLM`.
@@ -126,8 +144,12 @@ def get_prorxn(
     if mg_ckpt_path and not ckpt_path:
         weights = reduce_lit_ckpt(mg_ckpt_path, module_name='model.graphormer')
         mol_graphormer.load_state_dict(weights)
-    cgr_graphormer = GraphormerGraphEncoder(**cg_config) if cg_config is not None else None
-    rxn_graphormer = RxnGraphormer(mol_graphormer, cgr_graphormer)
+    
+    if partial_rxns:
+        rxn_graphormer = mol_graphormer
+    else:
+        cgr_graphormer = GraphormerGraphEncoder(**cg_config) if cg_config is not None else None
+        rxn_graphormer = RxnGraphormer(mol_graphormer, cgr_graphormer)
     
     prorxn = ProRxn(
         rxn_graphormer,

@@ -1,7 +1,7 @@
 import os
 import json
 import torch
-from Bio import SeqIO
+from Bio import SeqIO, pairwise2
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from rdkit.ML.Scoring.Scoring import CalcBEDROC, CalcEnrichment # type: ignore
@@ -20,7 +20,7 @@ def write_json(data, path):
 
 def read_fasta(path):
     records = SeqIO.parse(path, 'fasta')
-    seqs = {record.id: str(record.seq) for record in records}
+    seqs = {record.id: str(record.seq).rstrip('*') for record in records}
     return seqs
 
 def write_fasta(seqs, path):
@@ -28,15 +28,10 @@ def write_fasta(seqs, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     SeqIO.write(records, path, 'fasta')
 
-def print_trainable_params(model):
-    trainable_params = 0
-    all_params = 0
-    for _, param in model.named_parameters():
-        all_params += param.numel()
-        if param.requires_grad:
-            trainable_params += param.numel()
-    print(f'Trainable parameters: {trainable_params} ({trainable_params / all_params * 100:.2f}%)')
-    print(f'All parameters: {all_params}')
+def pairwise_identity(seq1, seq2):
+    best_aln = pairwise2.align.globalxx(seq1, seq2)[0]
+    matches = sum(a == b for a, b in zip(best_aln.seqA, best_aln.seqB))
+    return matches / len(best_aln.seqA)
 
 def classification_metrics(preds, labels):
     if type(preds) is not torch.Tensor:

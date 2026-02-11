@@ -6,12 +6,13 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from attr import dataclass
+from huggingface_hub import snapshot_download
+from pathlib import Path
 
 from esm.layers.rotary import RotaryEmbedding
 from esm.layers.regression_head import RegressionHead
 from esm.sdk.api import ESMCInferenceClient
 from esm.tokenization import EsmSequenceTokenizer, get_esmc_model_tokenizers
-from esm.utils.constants.esm3 import data_root
 from esm.utils.constants.models import ESMC_300M, ESMC_600M
 
 
@@ -394,6 +395,7 @@ class ESMC(nn.Module, ESMCInferenceClient):
         n_layers_cross_attn: int = 0,
         d_cross_attn: int | None = None,
         add_pooling_layer: bool = True,
+        local_files_only: bool = False,
         device: torch.device | None = None
     ):
         import warnings
@@ -412,8 +414,11 @@ class ESMC(nn.Module, ESMCInferenceClient):
                     d_cross_attn=d_cross_attn,
                     add_pooling_layer=add_pooling_layer
                 ).eval()
+            path = Path(snapshot_download(
+                repo_id="EvolutionaryScale/esmc-300m-2024-12", local_files_only=local_files_only
+            ))
             state_dict = torch.load(
-                data_root("esmc-300") / "data/weights/esmc_300m_2024_12_v0.pth",
+                path / "data/weights/esmc_300m_2024_12_v0.pth",
                 map_location=device
             )
         elif model_name == ESMC_600M:
@@ -427,8 +432,11 @@ class ESMC(nn.Module, ESMCInferenceClient):
                     d_cross_attn=d_cross_attn,
                     add_pooling_layer=add_pooling_layer
                 ).eval()
+            path = Path(snapshot_download(
+                repo_id="EvolutionaryScale/esmc-600m-2024-12", local_files_only=local_files_only
+            ))
             state_dict = torch.load(
-                data_root("esmc-600") / "data/weights/esmc_600m_2024_12_v0.pth",
+                path / "data/weights/esmc_600m_2024_12_v0.pth",
                 map_location=device
             )
         else:

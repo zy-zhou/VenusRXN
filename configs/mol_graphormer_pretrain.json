@@ -24,6 +24,5 @@
     "grad_acc": 1,
     "logger": false,
     "log_version": null,
-    "force_cpu": false,
     "precision": "32-true"
 }

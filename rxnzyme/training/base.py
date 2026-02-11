@@ -67,13 +67,14 @@ def get_trainer(train_config):
     return trainer
 
 class LightningModelBase(LightningModule):
-    def __init__(self, train_config):
+    def __init__(self, model, train_config):
         super().__init__()
-        self.model = None
+        self.model = model
         self.opt_name = train_config['optimizer']
         self.init_lr = train_config['lr']
         self.lr_decay = train_config['lr_decay']
         self.lr_decay_steps = train_config['lr_decay_steps']
+        self.save_hyperparameters(train_config)
     
     def configure_optimizers(self):
         optimizer = get_optimizer(self.opt_name, self.init_lr, self.parameters())
@@ -87,8 +88,8 @@ class LightningModelBase(LightningModule):
             )
         return config
     
-    def forward(self, batch):
-        return self.model(batch)
+    def forward(self, batch, *args, **kwargs):
+        return self.model(batch, *args, **kwargs)
     
     def compute_loss(self, batch):
         '''

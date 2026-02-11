@@ -84,7 +84,7 @@ class DistributedRxnBucketSampler(Sampler):
         # sort indices according to num_atoms obtained from file names
         self.indices = num_atoms.sort_values().index.tolist()
         assert batch_size > 1
-        self.batch_size = batch_size
+        self.batch_size = batch_size * world_size # global batch size
         self.bucket_size = bucket_size
         self.rank = rank
         self.world_size = world_size
@@ -94,7 +94,6 @@ class DistributedRxnBucketSampler(Sampler):
         self.epoch = 0
         self.buckets = self._create_buckets()
         self.num_batches = self._get_len() # per rank
-        self.total_batches = self.num_batches * self.world_size
     
     def _create_buckets(self):
         num_buckets = ceil(len(self.indices) / self.bucket_size)
@@ -107,13 +106,10 @@ class DistributedRxnBucketSampler(Sampler):
     def _get_len(self):
         num_batches = 0
         for bucket in self.buckets:
+            assert len(bucket) >= self.batch_size
             num_batches += len(bucket) // self.batch_size
             if len(bucket) % self.batch_size > 0 and not self.drop_last:
                 num_batches += 1
-        
-        num_batches = num_batches // self.world_size
-        if num_batches % self.world_size > 0 and not self.drop_last:
-            num_batches += 1
         return num_batches
     
     def __len__(self):
@@ -131,26 +127,19 @@ class DistributedRxnBucketSampler(Sampler):
             
             for i in range(0, len(bucket), self.batch_size):
                 batch = bucket[i: i + self.batch_size]
-                if len(batch) < self.batch_size and self.drop_last:
-                    break
+                if len(batch) < self.batch_size:
+                    if self.drop_last:
+                        break
+                    batch.extend(bucket[:self.batch_size - len(batch)])
                 batches.append(batch)
         
+        assert len(batches) == self.num_batches
         if self.shuffle: # shuffle the batches
             random.seed(seed + j + 1)
             random.shuffle(batches)
         
-        if self.drop_last:
-            batches = batches[:self.total_batches]
-        else:
-            pad_size = self.total_batches - len(batches)
-            if pad_size <= len(batches):
-                batches += batches[:pad_size]
-            else:
-                batches += (batches * ceil(pad_size / len(batches)))[:pad_size]
-        
-        batches = batches[self.rank:self.total_batches:self.world_size]
-        assert len(batches) == self.num_batches
-        return iter(batches)
+        batches = [batch[self.rank:self.batch_size:self.world_size] for batch in batches]
+        yield from batches
     
     def set_epoch(self, epoch):
         '''

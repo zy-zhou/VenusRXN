@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 from .reaction import x_vocabs, one_hots_to_labels
 from .graph_utils.collator import pad_2d, collate
 from .database import decompress_mol_graph, get_db_size
-from ..utils import read_json
+from ..utils import read_json, read_fasta
 
 ignore_label = -1
 
@@ -267,12 +267,19 @@ class RxnDatasetForCls(RxnDataset):
 class EnzymeDataset(Dataset):
     def __init__(
             self,
-            db_path, # path to a json file containing a dict that maps enzyme ids to enzyme sequences
+            db_path, # path to a json/fasta file that maps enzyme ids to enzyme sequences
             enz_ids=None,
             tokenizer=None,
             max_length=None
     ):
-        self.enz_seqs = read_json(db_path)
+        db_ext = os.path.splitext(db_path)[1]
+        if db_ext in {'.fasta', '.faa', '.fa'}:
+            self.enz_seqs = read_fasta(db_path)
+        elif db_ext == '.json':
+            self.enz_seqs = read_json(db_path)
+        else:
+            raise ValueError('Enzyme database must be a fasta or json file.')
+        
         if enz_ids is None:
             self.enz_ids = pd.Index(list(self.enz_seqs.keys()))
         else:

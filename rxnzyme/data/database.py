@@ -12,12 +12,9 @@ from .reaction import (
     e_dim,
     one_hots_to_labels,
     build_rxn_graphs,
-    get_reactive_center
+    get_reactive_center,
+    build_partial_rxn_graph
 )
-from ..utils import read_json, write_json
-
-bytes_per_rxn = 180000
-chunk_size = 100000
 
 def matrix_to_triu(matrix):
     assert torch.all(matrix == matrix.T), 'Cannot compress asymmetric matrix using triu'
@@ -85,6 +82,8 @@ def build_rxn_db(
         max_dist=20,
         db_dir='data/reaction_db',
         key_prefix=None,
+        bytes_per_rxn=180000,
+        chunk_size=100000,
         overwrite=True
     ):
     sep = '\t' if  rxn_smiles_path.endswith('.tsv') else ','
@@ -94,8 +93,9 @@ def build_rxn_db(
         index_col=index_col,
         usecols=[index_col, rxn_col] if index_col is not None else [rxn_col]
     )
-    all_rxns = all_rxns.loc[all_rxns.index.drop_duplicates()]
+    all_rxns = all_rxns[~all_rxns.index.duplicated()]
     all_rxns = all_rxns[rxn_col]
+    is_partial = all_rxns.iloc[0].find('>>') == -1
     map_size = len(all_rxns) * bytes_per_rxn
     num_chunks = ceil(len(all_rxns) / chunk_size)
     if key_prefix:
@@ -126,34 +126,44 @@ def build_rxn_db(
                 desc=f'Processing chunk {i + 1} of {num_chunks}',
                 total=len(chunk)
             ):
-                try:
-                    reactants_graph, products_graph, cgr = build_rxn_graphs(rxn_smiles, max_dist)
-                    reactive_center = get_reactive_center(reactants_graph, products_graph, cgr)
-                except AssertionError as error:
-                    print(error)
-                    print(f'Error reaction ID: {rxn_id}')
-                    continue
-                except Exception as error:
-                    print(f'Unexpected error: {error}')
-                    print(f'Error reaction ID: {rxn_id}')
-                    continue
-                
-                metadata.append(
-                    dict(
-                        rxn_id=rxn_id,
-                        num_atoms=reactants_graph.num_nodes,
-                        num_bonds=reactants_graph.num_edges,
-                        path_length=cgr.path_indices.size(1),
-                        center_size=reactive_center.size(0)
+                if not is_partial:
+                    try:
+                        reactants_graph, products_graph, cgr = build_rxn_graphs(rxn_smiles, max_dist)
+                        reactive_center = get_reactive_center(reactants_graph, products_graph, cgr)
+                    except Exception as e:
+                        print(f'Error processing reaction {rxn_id}: {e}')
+                        continue
+                    metadata.append(
+                        dict(
+                            rxn_id=rxn_id,
+                            num_atoms=reactants_graph.num_nodes,
+                            num_bonds=reactants_graph.num_edges,
+                            path_length=cgr.path_indices.size(1),
+                            center_size=reactive_center.size(0)
+                        )
                     )
-                )
-                rxn_graphs = dict(
-                    reactants=compress_mol_graph(reactants_graph),
-                    products=compress_mol_graph(products_graph),
-                    cgr=compress_mol_graph(cgr),
-                    reactive_center=compress_int_tensor(reactive_center) \
-                        if reactive_center.numel() > 0 else reactive_center
-                )
+                    rxn_graphs = dict(
+                        reactants=compress_mol_graph(reactants_graph),
+                        products=compress_mol_graph(products_graph),
+                        cgr=compress_mol_graph(cgr),
+                        reactive_center=compress_int_tensor(reactive_center) \
+                            if reactive_center.numel() > 0 else reactive_center
+                    )
+                else:
+                    try:
+                        mol_graph = build_partial_rxn_graph(rxn_smiles, max_dist)
+                    except Exception as e:
+                        print(f'Error processing reaction {rxn_id}: {e}')
+                        continue
+                    metadata.append(
+                        dict(
+                            rxn_id=rxn_id,
+                            num_atoms=mol_graph.num_nodes,
+                            num_bonds=mol_graph.num_edges,
+                            path_length=mol_graph.path_indices.size(1),
+                        )
+                    )
+                    rxn_graphs = compress_mol_graph(mol_graph)
 
                 txn.put(str(rxn_id).encode(), pickle.dumps(rxn_graphs))
 
@@ -203,45 +213,3 @@ def count_labels(db_dir, attr_combs):
         print(f'Unique labels for attribute combination {attr_comb.tolist()}: {len(counter)}')
     torch.save(label_counts, os.path.join(db_dir, 'label_counts.pkl'))
     return counters
-
-def build_enz_db(
-        df_path,
-        db_dir, 
-        enz_id_col='Uniprot ID', 
-        seq_col='Enzyme Seq', 
-        overwrite=True
-    ):
-    '''
-    Build mapping from Uniprot ID to enzyme sequence from dataframe and save as JSON.
-    
-    Args:
-        df_path (str): Path to input pickle file containing dataframe
-    '''
-    os.makedirs(db_dir, exist_ok=True)
-    db_path = os.path.join(db_dir, 'enzyme_db.json')
-
-    # Load dataframe
-    if df_path.endswith('.pkl'):
-        df = pd.read_pickle(df_path)
-    else:
-        df = pd.read_csv(df_path, sep='\t' if df_path.endswith('.tsv') else ',')
-    
-    # Create mapping dictionary
-    if not overwrite and os.path.isfile(db_path):
-        enzyme_db = read_json(db_path)
-    else:
-        enzyme_db = {}
-
-    for _, row in df.iterrows():
-        uniprot_ids = row[enz_id_col].split(';')
-        enzyme_seqs = row[seq_col].split(';')
-        
-        # Map each ID to corresponding sequence
-        for uid, seq in zip(uniprot_ids, enzyme_seqs):
-            enzyme_db[uid] = seq
-            
-    # Save as JSON in same directory as input file
-    write_json(enzyme_db, db_path)
-            
-    print(f"Built enzyme database with {len(enzyme_db)} entries")
-    print(f"Saved to {db_path}")

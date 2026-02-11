@@ -34,14 +34,12 @@ def parse_blast_results(blast_xml, db_size, save_path=None):
         blast_records = NCBIXML.parse(result_handle)
         
         for record in blast_records:
-            query_scores = np.full(db_size, -100, dtype=np.float32)
+            query_scores = np.full(db_size, 0, dtype=np.float32)
             indices, scores = [], []
             
-            for alignment in record.alignments:
+            for rank, alignment in enumerate(record.alignments):
                 indices.append(int(alignment.accession))
-                min_evalue = min(hsp.expect for hsp in alignment.hsps)
-                # higher score means better match
-                scores.append(- np.log10(min_evalue) if min_evalue > 0 else -100)
+                scores.append(1000 / (rank + 1))
             
             query_scores[indices] = scores
             all_scores.append(query_scores)
