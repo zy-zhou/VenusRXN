@@ -301,8 +301,9 @@ class TransformerStack(nn.Module):
         x: torch.Tensor,
         sequence_id: torch.Tensor | None = None,
         encoder_x: torch.Tensor | None = None,
-        encoder_attn_mask: torch.Tensor | None = None
-    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor]]:
+        encoder_attn_mask: torch.Tensor | None = None,
+        output_hidden_states: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor] | None]:
         """
         Forward pass of the TransformerStack.
 
@@ -318,10 +319,11 @@ class TransformerStack(nn.Module):
             post_norm: The output tensor of shape (batch_size, sequence_length, d_model).
             pre_norm: The embedding of shape (batch_size, sequence_length, d_model).
         """
-        hiddens = []
+        hiddens = [] if output_hidden_states else None
         for block in self.blocks:
             x = block(x, sequence_id, encoder_x, encoder_attn_mask)
-            hiddens.append(x)
+            if hiddens is not None:
+                hiddens.append(x)
         return self.norm(x), x, hiddens
 
 
@@ -337,7 +339,7 @@ class ESMCConfig:
 @dataclass
 class ESMCOutput:
     last_hidden_state: torch.Tensor | None
-    hidden_states: torch.Tensor | None
+    hidden_states: list[torch.Tensor] | None
     sequence_logits: torch.Tensor | None = None
     pooler_output: torch.Tensor | None = None
 
@@ -443,8 +445,8 @@ class ESMC(nn.Module, ESMCInferenceClient):
             raise ValueError(f"Model {model_name} not found in local model registry.")
         
         model_state_dict = model.state_dict()
-        missing_keys = [key for key in model_state_dict.keys() if key not in state_dict.keys()]
-        unexpected_keys = [key for key in state_dict.keys() if key not in model_state_dict.keys()]
+        missing_keys = [key for key in model_state_dict if key not in state_dict]
+        unexpected_keys = [key for key in state_dict if key not in model_state_dict]
         if unexpected_keys:
             warnings.warn(
                 f"Some weights from the model checkpoint were not used when initializing ESMC:\n"
@@ -478,7 +480,8 @@ class ESMC(nn.Module, ESMCInferenceClient):
         attention_mask: torch.Tensor | None = None,
         encoder_hidden_states: torch.Tensor | None = None,
         encoder_attention_mask: torch.Tensor | None = None,
-        output_sequence_logits: bool = False
+        output_sequence_logits: bool = False,
+        output_hidden_states: bool = False
     ) -> ESMCOutput:
         """
         Performs forward pass through the ESMC model. Check utils to see how to tokenize inputs from raw data.
@@ -489,6 +492,7 @@ class ESMC(nn.Module, ESMCInferenceClient):
             encoder_hidden_states (torch.Tensor, optional): The encoder output for cross-attention.
             encoder_attention_mask (torch.Tensor, optional): The attention mask for the encoder output.
             output_sequence_logits (bool, optional): Whether to output sequence logits.
+            output_hidden_states (bool, optional): Whether to return all hidden states.
 
         Returns:
             ESMCOutput: The output of the ESMC model.
@@ -503,11 +507,9 @@ class ESMC(nn.Module, ESMCInferenceClient):
             x,
             sequence_id=attention_mask,
             encoder_x=encoder_hidden_states,
-            encoder_attn_mask=encoder_attention_mask
+            encoder_attn_mask=encoder_attention_mask,
+            output_hidden_states=output_hidden_states
         )
-
-        # Stack hidden states into a [n_layers, B, L, D] matrix.
-        hiddens = torch.stack(hiddens, dim=0)  # type: ignore
 
         sequence_logits = self.sequence_head(x) if output_sequence_logits else None
         pooled_output = self.pooler(x[:, 0]) if self.pooler is not None else None

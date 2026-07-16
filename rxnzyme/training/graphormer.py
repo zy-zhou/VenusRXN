@@ -2,13 +2,11 @@ import torch
 import torch.nn as nn
 from .base import LightningModelBase, MultiAttrCELoss, ContrastiveLoss
 from ..utils import classification_metrics
-from ..data.datasets import ignore_label
+from ..data.datasets.base import ignore_label
 
 class LitMolGraphormerForMLM(LightningModelBase):
     def __init__(self, mlm_graphormer, train_config):
         super().__init__(mlm_graphormer, train_config)
-        self.alpha = train_config['alpha'] # weight for reactive center prediction task
-        self.beta = train_config['beta'] # weight for graph contrastive learning task
         self.ce_loss = MultiAttrCELoss(ignore_index=ignore_label)
         self.cl_loss = ContrastiveLoss(
             local_loss=train_config['local_loss'],
@@ -36,7 +34,7 @@ class LitMolGraphormerForMLM(LightningModelBase):
 
         cl_loss = self.cl_loss(r_reps, p_reps)
 
-        loss = mlm_loss + self.alpha * rcp_loss + self.beta * cl_loss
+        loss = mlm_loss + self.hparams.alpha * rcp_loss + self.hparams.beta * cl_loss
         logs = dict(
             batch_size=r_mlm_logits.size(0),
             mlm_loss=mlm_loss.detach(),

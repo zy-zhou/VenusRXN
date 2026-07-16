@@ -1,4 +1,3 @@
-import re
 import torch
 from transformers import EsmConfig, EsmTokenizer
 from peft import LoraConfig, inject_adapter_in_model
@@ -17,25 +16,11 @@ plm_dirs = {
     'esm1v-4': 'facebook/esm1v_t33_650M_UR90S_4',
     'esm1v-5': 'facebook/esm1v_t33_650M_UR90S_5',
     'esm2': 'facebook/esm2_t33_650M_UR50D',
+    'esm2-8m': 'facebook/esm2_t6_8M_UR50D',
     'esm2-35m': 'facebook/esm2_t12_35M_UR50D',
     'esm2-150m': 'facebook/esm2_t30_150M_UR50D',
     'esm2-3b': 'facebook/esm2_t36_3B_UR50D'
 }
-
-graphormer_lora_modules = ['q_proj', 'k_proj', 'v_proj']
-esm_lora_modules = ['query', 'key', 'value']
-esmc_lora_modules = ['layernorm_qkv.1', 'layernorm_q.1', 'kv']
-
-def reduce_lit_ckpt(ckpt_path, module_name='model'):
-    if not torch.cuda.is_available():
-        ckpt = torch.load(ckpt_path, map_location=torch.device('cpu'))
-    else:
-        ckpt = torch.load(ckpt_path)
-    prefix = f'{module_name}.'
-    weights = {
-        k.replace(prefix, ''): v for k, v in ckpt['state_dict'].items() if k.startswith(prefix)
-    }
-    return weights
 
 def from_pretrained_offline_first(hf_cls, model_name_or_path, **kwargs):
     '''
@@ -108,8 +93,18 @@ def get_plm(
 
     return plm
 
+def reduce_lit_ckpt(ckpt_path, module_name='model'):
+    if not torch.cuda.is_available():
+        ckpt = torch.load(ckpt_path, map_location=torch.device('cpu'))
+    else:
+        ckpt = torch.load(ckpt_path)
+    prefix = f'{module_name}.'
+    weights = {
+        k.replace(prefix, ''): v for k, v in ckpt['state_dict'].items() if k.startswith(prefix)
+    }
+    return weights
+
 def get_prorxn(
-    plm_name,
     prorxn_config,
     mg_config,
     cg_config=None,
@@ -132,16 +127,16 @@ def get_prorxn(
         ckpt_path: Path to the lightning checkpoint of `LitProRxnForMM`.
     '''
     plm = get_plm(
-        plm_name,
+        prorxn_config['plm'],
         add_cross_attn=prorxn_config['gamma'] > 0,
         d_cross_attn=mg_config['embedding_dim'] if cg_config is None else cg_config['embedding_dim'],
-        pretrained=pretrained_plm and not ckpt_path,
+        pretrained=pretrained_plm and ckpt_path is None,
         grad_ckpt=grad_ckpt
     )
     
     mol_graphormer = GraphormerGraphEncoder(**mg_config)
     # load pretrained mol graphormer if provided
-    if mg_ckpt_path and not ckpt_path:
+    if mg_ckpt_path is not None and ckpt_path is None:
         weights = reduce_lit_ckpt(mg_ckpt_path, module_name='model.graphormer')
         mol_graphormer.load_state_dict(weights)
     
@@ -158,7 +153,7 @@ def get_prorxn(
         proj_type=prorxn_config['proj_type']
     )
     # load pretrained prorxn if provided
-    if ckpt_path:
+    if ckpt_path is not None:
         weights = reduce_lit_ckpt(ckpt_path)
         prorxn.load_state_dict(weights)
     
@@ -172,22 +167,48 @@ def inject_lora_to_prorxn(ltr_prorxn, r=16, dropout=0.1, trainable_heads=True):
         ltr_prorxn: Instance of `ProRxnForLTR`.
         trainable_heads: Whether to set the output layers trainable.
     '''
-    plm_lora_modules = esmc_lora_modules if type(ltr_prorxn.prorxn.plm) is ESMC else esm_lora_modules
+    graphormer_lora_modules = [
+        'q_proj',
+        'k_proj',
+        'v_proj',
+        'fc1',
+        'fc2'
+    ]
+    if type(ltr_prorxn.prorxn.plm) is ESMC:
+        plm_lora_modules = [
+            'layernorm_qkv.1',
+            'layernorm_q.1',
+            'kv',
+            'ffn.1',
+            'ffn.3'
+        ]
+    else:
+        plm_lora_modules = [
+            'query',
+            'key',
+            'value',
+            'intermediate.dense',
+            'output.dense'
+        ]
     target_modules = graphormer_lora_modules + plm_lora_modules
+    
+    if trainable_heads:
+        modules_to_save = [
+            'prorxn.plm.pooler',
+            'prorxn.out_proj',
+            'prorxn.rxn_proj',
+            'prorxn.enz_proj',
+            'ranking_head'
+        ]
+    else:
+        modules_to_save = None
+    
     lora_config = LoraConfig(
         r=r,
         target_modules=target_modules,
         lora_alpha=r,
         lora_dropout=dropout,
-        bias='none'
+        bias='none',
+        modules_to_save=modules_to_save
     )
     inject_adapter_in_model(lora_config, ltr_prorxn)
-
-    if not trainable_heads:
-        return
-    
-    # manually unfreeze the heads since modules_to_save will not work
-    pattern = r'^(prorxn\.(plm\.pooler|out_proj|rxn_proj|enz_proj)|ranking_head|t$)'
-    for name, param in ltr_prorxn.named_parameters():
-        if re.match(pattern, name):
-            param.requires_grad = True

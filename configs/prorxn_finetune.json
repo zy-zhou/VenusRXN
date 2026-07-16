@@ -1,4 +1,5 @@
 {
+    "plm": "esmc_600m",
     "multi_hop_max_dist": 5,
     "max_length": 800,
     "train_batch_size": 64,
@@ -7,10 +8,11 @@
     "prefetch_factor": 2,
     "optimizer": "adamw",
     "lr": 0.0001,
+    "backbone_lr": null,
     "lr_decay": 0,
     "lr_decay_steps": 1,
     "output_type": "cross_attn",
-    "ranking_loss": false,
+    "loss_fn": "regr",
     "lora_r": 0,
     "ckpt_dir": "checkpoints",
     "save_top_k": 5,

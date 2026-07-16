@@ -1,10 +1,9 @@
 import os
 import json
 import torch
-from Bio import SeqIO, pairwise2
+from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-from rdkit.ML.Scoring.Scoring import CalcBEDROC, CalcEnrichment # type: ignore
 from scipy.stats import spearmanr, pearsonr
 from sklearn.metrics import mean_squared_error, r2_score
 
@@ -28,11 +27,6 @@ def write_fasta(seqs, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     SeqIO.write(records, path, 'fasta')
 
-def pairwise_identity(seq1, seq2):
-    best_aln = pairwise2.align.globalxx(seq1, seq2)[0]
-    matches = sum(a == b for a, b in zip(best_aln.seqA, best_aln.seqB))
-    return matches / len(best_aln.seqA)
-
 def classification_metrics(preds, labels):
     if type(preds) is not torch.Tensor:
         preds = torch.from_numpy(preds)
@@ -46,10 +40,10 @@ def classification_metrics(preds, labels):
     # Calculate confusion matrix
     num_classes = max(labels.max(), preds.max()) + 1
     indices = labels * num_classes + preds
-    confusion_matrix = torch.bincount(indices, minlength=num_classes**2).reshape(num_classes, num_classes)
+    conf_matrix = torch.bincount(indices, minlength=num_classes**2).reshape(num_classes, num_classes)
     
     # Calculate confusion entropy (CEN)
-    conf_matrix_norm = confusion_matrix / confusion_matrix.sum(dim=1, keepdim=True)
+    conf_matrix_norm = conf_matrix / conf_matrix.sum(dim=1, keepdim=True)
     conf_matrix_norm[torch.isnan(conf_matrix_norm)] = 0
     
     class_entropy = - torch.sum(conf_matrix_norm * torch.log2(conf_matrix_norm + 1e-10), dim=1)
@@ -57,10 +51,10 @@ def classification_metrics(preds, labels):
     cen = class_entropy.mean()
     
     # Calculate MCC
-    tp = confusion_matrix.diag()
-    fp = confusion_matrix.sum(0) - tp
-    fn = confusion_matrix.sum(1) - tp
-    tn = confusion_matrix.sum() - (tp + fp + fn)
+    tp = conf_matrix.diag()
+    fp = conf_matrix.sum(0) - tp
+    fn = conf_matrix.sum(1) - tp
+    tn = conf_matrix.sum() - (tp + fp + fn)
     
     numerator = tp * tn - fp * fn
     denominator = torch.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
@@ -74,7 +68,7 @@ def classification_metrics(preds, labels):
         mcc=mean_mcc.item()
     )
 
-def retrieval_metrics(preds, labels, k=20, num_pos=None, ignore_index=-100):
+def retrieval_metrics(preds, labels, k=20, num_pos=None, reduce=True, ignore_index=-100):
     '''
     Compute retrieval metrics on different queries w.r.t their candidates.
 
@@ -83,6 +77,7 @@ def retrieval_metrics(preds, labels, k=20, num_pos=None, ignore_index=-100):
         labels: A binary tensor with the same shape as `preds` indicating the true candidates of each query.
         k: The number of top candidates to consider.
         num_pos: The number of positives for each query. If None, this is infered from the labels. Shape: [num_src]
+        reduce: Whether to reduce the metrics to a single value.
         ignore_index: When computing the metrics, the candidates with this label value are ignored.
     '''
     if type(preds) is not torch.Tensor:
@@ -93,25 +88,96 @@ def retrieval_metrics(preds, labels, k=20, num_pos=None, ignore_index=-100):
     
     label_mask = labels != ignore_index
     preds = preds.where(label_mask, -1000)
-    labels = labels.where(label_mask, 0)
+    labels = labels.where(label_mask, 0).to(dtype=preds.dtype)
 
     # sort according to the predicted scores
     indices = preds.topk(k, dim=1).indices
     topk_labels = labels.gather(dim=1, index=indices)
 
     num_matches = topk_labels.sum(1)
-    num_pos = labels.sum(1) if num_pos is None else num_pos
-    success_rate = torch.sum(num_matches > 0) / num_matches.size(0)
-    precision = torch.mean(num_matches / k)
-    recall = torch.mean(num_matches / num_pos)
+    if num_pos is None:
+        num_pos = labels.sum(1)
+    else:
+        num_pos = num_pos.to(device=preds.device, dtype=preds.dtype)
+    success_rate = (num_matches > 0).to(dtype=preds.dtype)
+    precision = num_matches / k
+    recall = num_matches / num_pos
+    if reduce:
+        success_rate = success_rate.mean().item()
+        precision = precision.mean().item()
+        recall = recall.mean().item()
 
     return {
-        f'sr@{k}': success_rate.item(),
-        f'acc@{k}': precision.item(),
-        f'recall@{k}': recall.item()
+        f'sr@{k}': success_rate,
+        f'acc@{k}': precision,
+        f'recall@{k}': recall
     }
 
-def screening_metrics(preds, labels, alpha=85, fraction=0.02, ignore_index=-100):
+def calc_bedroc(preds, labels, alpha=85, reduce=True, ignore_index=-100):
+    '''
+    Compute BEDROC for already sorted scores and labels.
+    '''
+    alpha = float(alpha)
+
+    label_mask = labels != ignore_index
+    num_mol = label_mask.sum(dim=1, dtype=preds.dtype)
+    safe_num_mol = torch.clamp(num_mol, min=1.0)
+    active = labels.where(label_mask, 0).to(dtype=preds.dtype)
+    num_actives = active.sum(dim=1)
+
+    ranks = torch.arange(1, labels.size(1) + 1, device=labels.device, dtype=preds.dtype)
+    weights = torch.exp(-(alpha * ranks.unsqueeze(0)) / safe_num_mol.unsqueeze(1))
+    sum_exp = (active * weights).sum(dim=1)
+
+    exp_neg_alpha = torch.exp(torch.tensor(-alpha, device=labels.device, dtype=preds.dtype))
+    exp_pos_alpha = torch.exp(torch.tensor(alpha, device=labels.device, dtype=preds.dtype))
+    denom = (1.0 / safe_num_mol) * ((1.0 - exp_neg_alpha) / (torch.exp(alpha / safe_num_mol) - 1.0))
+
+    rie = torch.zeros_like(num_actives)
+    has_actives = num_actives > 0
+    rie[has_actives] = sum_exp[has_actives] / (num_actives[has_actives] * denom[has_actives])
+
+    ratio = num_actives / safe_num_mol
+    ratio = ratio.where(has_actives, torch.ones_like(ratio))
+    rie_max = (1.0 - torch.exp(-alpha * ratio)) / (ratio * (1.0 - exp_neg_alpha))
+    rie_min = (1.0 - torch.exp(alpha * ratio)) / (ratio * (1.0 - exp_pos_alpha))
+
+    bedroc = torch.zeros_like(num_actives)
+    normal = has_actives & (rie_max != rie_min)
+    bedroc[normal] = (rie[normal] - rie_min[normal]) / (rie_max[normal] - rie_min[normal])
+    bedroc[has_actives & ~normal] = 1.0
+
+    return bedroc.mean().item() if reduce else bedroc
+
+def calc_enrichment(preds, labels, fraction=0.02, reduce=True, normalize=False, ignore_index=-100):
+    '''
+    Compute enrichment factor for already sorted scores and labels.
+    '''
+    label_mask = labels != ignore_index
+    num_mol = label_mask.sum(dim=1, dtype=preds.dtype)
+    active = labels.where(label_mask, 0).to(dtype=preds.dtype)
+    num_actives = active.sum(dim=1)
+    num_top = torch.ceil(num_mol * fraction)
+    ranks = torch.arange(1, labels.size(1) + 1, device=labels.device, dtype=preds.dtype)
+    top_mask = ranks.unsqueeze(0) <= num_top.unsqueeze(1)
+    num_top_actives = active.where(top_mask, 0).sum(dim=1)
+
+    ef = torch.zeros_like(num_actives)
+    if normalize:
+        max_top_actives = torch.minimum(num_actives, num_top)
+        has_actives = max_top_actives > 0
+        ef[has_actives] = num_top_actives[has_actives] / max_top_actives[has_actives]
+    else:
+        has_actives = (num_actives > 0) & (num_top > 0)
+        ef[has_actives] = (
+            num_top_actives[has_actives]
+            * num_mol[has_actives]
+            / (num_top[has_actives] * num_actives[has_actives])
+        )
+
+    return ef.mean().item() if reduce else ef
+
+def screening_metrics(preds, labels, alpha=85, fraction=0.02, normalize=False, reduce=True, ignore_index=-100):
     '''
     Compute virtual screening metrics on different queries w.r.t their candidates.
 
@@ -120,6 +186,8 @@ def screening_metrics(preds, labels, alpha=85, fraction=0.02, ignore_index=-100)
         labels: A binary tensor with the same shape as `preds` indicating the true candidates of each query.
         alpha: Parameter for BEDROC.
         fraction: Parameter for enrichment factor.
+        normalize: Whether to normalize EF by its theoretical maximum.
+        reduce: Whether to reduce the metrics to a single value.
         ignore_index: When computing the metrics, the candidates with this label value are ignored.
     '''
     if type(preds) is not torch.Tensor:
@@ -135,15 +203,8 @@ def screening_metrics(preds, labels, alpha=85, fraction=0.02, ignore_index=-100)
     preds, indices = preds.sort(dim=1, descending=True)
     labels = labels.gather(dim=1, index=indices)
     
-    bedroc, ef = [], []
-    scores = torch.stack([preds, labels], dim=-1).double().numpy(force=True) # num_src, num_tgt, 2
-    num_cdts = label_mask.sum(1).tolist()
-    for i, n in enumerate(num_cdts):
-        bedroc.append(CalcBEDROC(scores[i][:n], col=1, alpha=alpha))
-        ef.append(CalcEnrichment(scores[i][:n], col=1, fractions=[fraction])[0])
-    N = preds.size(0)
-    bedroc = sum(bedroc) / N
-    ef = sum(ef) / N
+    bedroc = calc_bedroc(preds, labels, alpha, reduce, ignore_index)
+    ef = calc_enrichment(preds, labels, fraction, reduce, normalize, ignore_index)
 
     return {
         f'bedroc@{alpha}': bedroc,

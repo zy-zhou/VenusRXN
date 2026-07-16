@@ -9,8 +9,19 @@ from lightning import LightningModule, Trainer
 from lightning.pytorch.loggers import CSVLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 
-def get_optimizer(optimizer, lr, params):
-    params = filter(lambda p: p.requires_grad, params)
+def get_optimizer(optimizer, params, lr=0.001):
+    params = list(params)
+    if len(params) == 0:
+        raise ValueError('The parameter list is empty.')
+    if isinstance(params[0], torch.Tensor):
+        params = filter(lambda p: p.requires_grad, params)
+    elif isinstance(params[0], dict):
+        params = [param_group.copy() for param_group in params]
+        for param_group in params:
+            param_group['params'] = filter(lambda p: p.requires_grad, param_group['params'])
+    else:
+        raise ValueError('Invalid parameter type in the parameter list: ' + type(params[0]))
+    
     if optimizer == 'sgd':
         return optim.SGD(params, lr=lr)
     elif optimizer == 'nag':
@@ -70,21 +81,18 @@ class LightningModelBase(LightningModule):
     def __init__(self, model, train_config):
         super().__init__()
         self.model = model
-        self.opt_name = train_config['optimizer']
-        self.init_lr = train_config['lr']
-        self.lr_decay = train_config['lr_decay']
-        self.lr_decay_steps = train_config['lr_decay_steps']
         self.save_hyperparameters(train_config)
-    
+
     def configure_optimizers(self):
-        optimizer = get_optimizer(self.opt_name, self.init_lr, self.parameters())
+        hparams = self.hparams
+        optimizer = get_optimizer(hparams.optimizer, self.parameters(), hparams.lr)
         config = {'optimizer': optimizer}
-        
-        if self.lr_decay > 0:
+
+        if hparams.lr_decay > 0:
             config['lr_scheduler'] = StepLR(
                 optimizer=optimizer,
-                step_size=self.lr_decay_steps,
-                gamma=self.lr_decay
+                step_size=hparams.lr_decay_steps,
+                gamma=hparams.lr_decay
             )
         return config
     
@@ -188,14 +196,14 @@ class MultiAttrCELoss(nn.Module):
 
 class ContrastiveLoss(nn.Module):
     def __init__(
-            self,
-            local_loss=True,
-            gather_with_grad=False,
-            rank=0,
-            world_size=1,
-            soft_weight=1.0,
-            return_logits=False
-        ):
+        self,
+        local_loss=True,
+        gather_with_grad=False,
+        rank=0,
+        world_size=1,
+        soft_weight=1.0,
+        return_logits=False
+    ):
         super().__init__()
         self.local_loss = local_loss
         self.gather_with_grad = gather_with_grad
@@ -284,7 +292,7 @@ class ContrastiveLoss(nn.Module):
             return loss
 
 class PairwiseRankingLoss(nn.Module):
-    def __init__(self, fn='hinge', margin=1.0):
+    def __init__(self, fn='log', margin=1.0):
         super().__init__()
         if fn not in {'hinge', 'exp', 'log'}:
             raise ValueError(f'Unknown loss function: {fn}')

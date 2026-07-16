@@ -1,4 +1,5 @@
 {
+    "plm": "esmc_600m",
     "multi_hop_max_dist": 5,
     "max_length": 800,
     "train_batch_size": 10,
@@ -16,8 +17,9 @@
     "proj_dim": 256,
     "proj_type": "linear",
     "gamma": 1.0,
+    "ranking_loss": false,
     "ckpt_dir": "checkpoints",
-    "save_top_k": 10,
+    "save_top_k": 5,
     "max_epochs": 100,
     "val_metric": "val_recall@20",
     "val_interval": 1,
