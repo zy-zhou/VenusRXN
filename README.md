@@ -1,5 +1,6 @@
 # VenusRXN: Reaction-Conditioned Enzyme Discovery with Multimodal Deep Learning
 VenusRXN is a multimodal deep learning framework enabling reaction-conditioned enzyme discovery. By unifying a pre-trained reaction encoder with a protein language model through multi-task learning, VenusRXN achieves fine-grained alignment and fusion of reaction and enzyme representations. It supports fast, scalable enzyme retrieval from either reaction queries or template enzymes, and fine-tuning for task-specific enzyme recommendation. This repository contains the source code and benchmarking dataset of VenusRXN.
+
 ![VenusRXN overview](VenusRXN.png)
 # Requirements
 Install the dependencies according to environment.yml. It is recommended to install the packages in the following order:
