@@ -51,6 +51,7 @@ def parse_args():
     parser.add_argument('--eval_batch_size', '-eb', type=int, default=80)
     parser.add_argument('--precision', '-ps', type=str, default='bf16-true')
     parser.add_argument('--ckpt_path', '-ckpt', type=str, default=None)
+    parser.add_argument('--pred_dir', '-pd', type=str, default='predictions')
     parser.add_argument('--overwrite', '-o', action='store_true')
     return parser.parse_args()
 
@@ -89,12 +90,14 @@ if __name__ == '__main__':
 
     if args.ckpt_path:
         pred_path = os.path.join(*os.path.splitext(args.ckpt_path)[0].split('/')[1:])
-        pred_path = 'predictions/' + pred_path + ('_ref.pkl' if args.ref_enzymes else '.pkl')
+        pred_path = os.path.join(
+            args.pred_dir, pred_path + ('_ref.pkl' if args.ref_enzymes else '.pkl')
+        )
     else:
         assert args.ref_enzymes
-        pred_path = 'predictions/{}/{}_ref.pkl'.format(
-            args.plm_name,
-            args.test_ids_path.split('/')[-2]
+        pred_path = os.path.join(
+            args.pred_dir, args.plm_name,
+            f'{args.test_ids_path.split("/")[-2]}_ref.pkl'
         )
     
     if not os.path.exists(pred_path) or args.overwrite: # run prediction
